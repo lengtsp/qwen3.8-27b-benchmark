@@ -89,6 +89,31 @@ At `max-model-len=122880`, vLLM reported **443,404 usable KV-cache tokens / 3.61
 
 The runner accepts these tested values: `8192`, `12288`, `24576`, `32768`, `81920`, and `122880`. It runs with CUDA graphs (`enforce_eager=False` in the vLLM log), so no eager-mode penalty is included in the results above.
 
+### Ready-to-run vLLM profiles
+
+[`scripts/run_vllm_profile.sh`](scripts/run_vllm_profile.sh) encodes the recommended parameters below. It uses the local model path by default; set `MODEL=/your/model/path` to override it. Every profile uses Qwen's native MTP with **3 draft tokens**, BF16 weights, `gpu-memory-utilization=0.90`, graph mode, and a 1 MP/page vision limit. The FP8 profiles require a FlashInfer-capable vLLM install and should pass a task-quality check before production OCR use.
+
+| Script profile | Use case | `--max-model-len` | `--kv-cache-dtype` | Command |
+| --- | --- | ---: | --- | --- |
+| `text` | Interactive text/chat | 12,288 | `auto` | `bash scripts/run_vllm_profile.sh text` |
+| `code` | Coding and agents | 32,768 | `auto` | `bash scripts/run_vllm_profile.sh code` |
+| `ocr` | Page-at-a-time OCR/document understanding | 32,768 | `auto` | `bash scripts/run_vllm_profile.sh ocr` |
+| `long-80k-quality` | 80K documents, accuracy first | 81,920 | `auto` | `bash scripts/run_vllm_profile.sh long-80k-quality` |
+| `long-80k-capacity` | 80K documents, higher concurrency | 81,920 | `fp8_e4m3` | `bash scripts/run_vllm_profile.sh long-80k-capacity` |
+| `long-120k-quality` | 120K documents, accuracy first | 122,880 | `auto` | `bash scripts/run_vllm_profile.sh long-120k-quality` |
+| `long-120k-capacity` | 120K documents, higher concurrency | 122,880 | `fp8_e4m3` | `bash scripts/run_vllm_profile.sh long-120k-capacity` |
+
+The essential vLLM command emitted by the script is:
+
+```bash
+vllm serve "$MODEL" \
+  --dtype bfloat16 \
+  --max-model-len "$MAX_MODEL_LEN" \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+  --kv-cache-dtype "$KV_CACHE_DTYPE" \
+  --gpu-memory-utilization 0.90
+```
+
 ### Concurrent serving benchmark: comparison with the supplied RTX PRO 6000 result
 
 The supplied screenshot and the test below use a different metric from the single-user table: **output token throughput is the aggregate across concurrent requests**, not the speed one caller sees. The useful per-caller decode proxy is `1 / TPOT`. The screenshot's 41.70 ms TPOT is about 24.0 tok/s per active stream even though its aggregate output figure is 112.60 tok/s.
