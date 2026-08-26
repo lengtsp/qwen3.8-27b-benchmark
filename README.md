@@ -202,10 +202,13 @@ The follow-up used **all 24 pages** of the supplied Thai cloud-security standard
 | Full 1800 | 1280 × 1792; 54,315 | 50.34 | **11.24** | 90/96 = 93.8% | Faster complete-page draft |
 | **Full 2000** | **1408 × 1984; 66,027** | **50.30** | **11.25** | **92/96 = 95.8%** | **Best primary full-page OCR** |
 | Full 2200 | 1536 × 2176; 78,891 | 49.43 | 11.52 | 91/96 = 94.8% | More image cost, no quality gain |
+| Full 2600, **one page/request** | 1824 × 2592; 113,391 | 34.64 | 16.28 | 76/96 = 79.2% | Accuracy-control only; do **not** use as baseline |
 | PP-DocLayoutV3 crop 1800 | layout content; 48,769 | 54.25 | 10.19 | 90/96 = 93.8% | Not archival: page-1 title is removed |
 | PP-DocLayoutV3 crop 2200 | layout content; 71,466 | 51.37 | 10.85 | **93/96 = 96.9%** | Second-pass clause/date check only; header/title metadata is removed |
 
-The correct workflow is **full-page 2000** as the OCR record, followed by a targeted crop only for legally material dates, gazette/section numbers, locations, statistics, or a table row/cell. Automatic content cropping improves speed and local legibility but cannot replace the official header/title or reconstruct geometry-faithful table cells. The exact per-page scores, error types, crop policy, installation, and reproducible commands are in [`docs/ppdoclayoutv3-24-page-sweep.md`](docs/ppdoclayoutv3-24-page-sweep.md). PP-DocLayoutV3 is installed locally at `/root/llm-cache/pp-doclayoutv3-safetensors` and runs CPU-only in `/root/venvs/ppstructurev3`, independently of the vLLM GPU service.
+The 2600 profile is a distinct accuracy-control run: 24 sequential HTTP requests, one 1824 × 2592 image per request, 2,048 output-token ceiling, MTP 3, `kv-cache-dtype=auto`, `max-model-len=32768`, `max-num-seqs=1`, 80% GPU reservation, and `--enforce-eager` to avoid an environment-specific CUDA-graph allocation failure. All 24 responses stopped naturally, so the lower score is a quality finding rather than output truncation. It is slower and makes more legal/structural substitutions than 2000; higher image area is therefore not a quality upgrade here.
+
+The correct workflow is **full-page 2000** as the OCR record, followed by a targeted crop only for legally material dates, gazette/section numbers, locations, statistics, or a table row/cell. Automatic content cropping improves speed and local legibility but cannot replace the official header/title or reconstruct geometry-faithful table cells. The exact per-page scores, error types, 2600 control, crop policy, installation, and reproducible commands are in [`docs/ppdoclayoutv3-24-page-sweep.md`](docs/ppdoclayoutv3-24-page-sweep.md). PP-DocLayoutV3 is installed locally at `/root/llm-cache/pp-doclayoutv3-safetensors` and runs CPU-only in `/root/venvs/ppstructurev3`, independently of the vLLM GPU service.
 
 ### Long input + long output: fixed 4,096-token completion
 

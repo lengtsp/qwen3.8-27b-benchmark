@@ -63,13 +63,16 @@ def call_api(base_url: str, model: str, content: list[dict], max_tokens: int) ->
     }
 
 
-def single_content(page_number: int, image_url: str) -> list[dict]:
+def single_content(
+    page_number: int, image_url: str, instruction: str | None = None
+) -> list[dict]:
     return [
         {"type": "text", "text": f"[เอกสารหน้า {page_number}]"},
         {"type": "image_url", "image_url": {"url": image_url}},
         {
             "type": "text",
-            "text": (
+            "text": instruction
+            or (
                 "ทำ OCR จากภาพนี้เท่านั้น ถอดข้อความภาษาไทยตามลำดับที่อ่านได้ "
                 "โดยคงหัวข้อ เลขข้อ วันที่ และตัวเลขสำคัญไว้ให้มากที่สุด. "
                 "หากอ่านไม่ชัดให้เขียน [อ่านไม่ชัด] และห้ามเติมจากความรู้ภายนอกภาพ."
@@ -78,7 +81,9 @@ def single_content(page_number: int, image_url: str) -> list[dict]:
     ]
 
 
-def batch_content(page_numbers: list[int], image_urls: list[str]) -> list[dict]:
+def batch_content(
+    page_numbers: list[int], image_urls: list[str], instruction: str | None = None
+) -> list[dict]:
     content: list[dict] = []
     for page_number, image_url in zip(page_numbers, image_urls, strict=True):
         content.append({"type": "text", "text": f"[เอกสารหน้า {page_number}]"})
@@ -86,7 +91,8 @@ def batch_content(page_numbers: list[int], image_urls: list[str]) -> list[dict]:
     content.append(
         {
             "type": "text",
-            "text": (
+            "text": instruction
+            or (
                 "ทำ OCR จากภาพทุกหน้าที่ให้มา ตอบแยกหัวข้อ [หน้า n] และถอดข้อความไทย "
                 "ตามลำดับที่อ่านได้ของแต่ละหน้า โดยคงหัวข้อ เลขข้อ วันที่ และตัวเลขสำคัญ. "
                 "หากอ่านไม่ชัดให้เขียน [อ่านไม่ชัด] และห้ามเติมจากความรู้ภายนอกภาพ."
@@ -109,6 +115,10 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--model", default="qwen3.8-27b")
     parser.add_argument("--max-tokens-per-page", type=int, default=700)
+    parser.add_argument(
+        "--instruction",
+        help="Optional image-only OCR instruction; use a narrow field request for verification crops.",
+    )
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -141,7 +151,7 @@ def main() -> None:
                         args.model,
                         single_content(
                             page_number,
-                            image_data_url(path, args.cache_buster_id),
+                            image_data_url(path, args.cache_buster_id), args.instruction
                         ),
                         args.max_tokens_per_page,
                     ),
@@ -163,6 +173,7 @@ def main() -> None:
                             image_data_url(path, args.cache_buster_id)
                             for path in args.images
                         ],
+                        args.instruction,
                     ),
                     args.max_tokens_per_page * len(args.images),
                 ),
@@ -192,6 +203,7 @@ def main() -> None:
                                     batch_pages, batch_paths, strict=True
                                 )
                             ],
+                            args.instruction,
                         ),
                         args.max_tokens_per_page * len(batch_paths),
                     ),

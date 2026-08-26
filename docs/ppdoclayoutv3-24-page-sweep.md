@@ -17,6 +17,32 @@ Do not replace it with the apparently higher-scoring PP-DocLayoutV3 crop. The 22
 | Extra check of prose/date clause | PP-DocLayoutV3 crop, 2200 profile | 93/96 (96.9%), **not complete page** | 51.37 tok/s, 10.85 s/page | Second pass only; retain full page |
 | 1400 px | Full page | Not valid for full-document comparison: pages 17–24 hit output cap | 57.01 tok/s, 12.86 s/page | Do not use this batching/output limit |
 
+## 2600 px pagewise accuracy-control
+
+This is deliberately a different protocol from the eight-page sweep: **one 1824 × 2592 image and one HTTP request at a time**, repeated for all 24 pages after a discarded page-1 warm-up. It used Qwen MTP 3, `kv-cache-dtype=auto`, `max-model-len=32768`, `max-num-seqs=1`, `gpu-memory-utilization=0.80`, and `--enforce-eager`. Eager mode was selected only because CUDA-graph profiling in this WSL driver environment failed during a 1.43-GB allocation; its speed must not be compared as a production graph-mode speed result.
+
+| Input | Requests | Prompt / completion tokens | E2E elapsed | E2E output tok/s | Seconds/page | Finish status | Terra anchors |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| Full 2600 (1824 × 2592; 4.728 MP) | 24 × 1 page | 113,391 / 13,538 | 390.79 s | 34.64 | 16.28 | All 24 `stop` | 76/96 = 79.2% |
+
+The score is **not** a full-text CER; it is four source-visual anchors per page. Nevertheless it is materially below full 2000 (92/96 = 95.8%), while also being slower. The meaningful errors are structural and legal/numeric rather than output truncation: page 1 changes `๒๔๘` to `๒๘๘` and replaces the two-year effective clause; page 3 changes 3 September to 30 September; page 4 changes `๖๓๒/๑๕๕/๑๔๘` and threat numbers; pages 5–8 alter section numbering/table structure; and page 22 changes `๕.๒.๙` family numbering. Therefore **do not increase beyond the 2000 full-page profile as an OCR-quality remedy**.
+
+### Approved hybrid patches only
+
+PP-DocLayoutV3 supplies region geometry; a field crop is then read by Qwen and visually audited. A crop never replaces the page transcript. For the 2600 control, Terra approved only this allowlist:
+
+| Page | Crop field | Approved replacement | Do not use |
+| ---: | --- | --- | --- |
+| 3 | Signature/date line | `ประกาศ ณ วันที่ ๓ กันยายน พ.ศ. ๒๕๖๗`; `ภูมิธรรม เวชยชัย` | Any other page-3 crop text |
+| 4 | Education statistic | `๖๓๒` | The rest of the statistics paragraph |
+| 4 | Appendix/date crop | token `แนบท้ายประกาศ`; date `๒๒ ธันวาคม ๒๕๖๖` | Treating the crop as the full title/transcript |
+
+The dedicated gazette crop misread `๑๔๑` as `๑๘๑`; the effective-date crop still wrote the following-day rule; other statistic and threat crops produced wrong numbers or invented values. Those outputs are explicitly rejected. The PDF text layer was also tested and has mojibake on pages 1 and 3, so it is not used as ground truth or as a hybrid patch source.
+
+### PaddleOCR status on this host
+
+PP-DocLayoutV3 is installed and completed layout detection for all 24 pages; its boxes are the crop source used above. The base Thai PaddleOCR detector/recognizer weights were also downloaded, but **no PaddleOCR transcript is included in the scores**: a normal CPU run failed in Paddle's oneDNN/PIR path, and the fallback attempted to allocate about 31.5 GiB of WSL memory before the Linux process was OOM-killed. A smaller 2600-px retry also made the Ubuntu-E WSL service unstable. PaddleOCR-VL 1.6 is **not installed yet**; the required GPU Paddle wheel is a 1.8-GB download and remains incomplete. Until that GPU environment installs and produces independently checked output, full-page Qwen 2000 plus PP-DocLayoutV3 field crops remains the reproducible accuracy recommendation.
+
 ## What “1400 / 1800 / 2000 / 2200” means here
 
 These are actual image inputs, not an enlarged `max_model_len` reservation. To keep Qwen's vision grid deterministic, the full A4 inputs were pre-resized to these exact 32-pixel-grid dimensions before sending them to the already-warm high-resolution server:
@@ -145,6 +171,22 @@ uv pip install --python /root/venvs/ppstructurev3/bin/python \
   --images /path/to/ocr-ppdoclayoutv3/images/2000/full/page-*.png \
   --max-tokens-per-page 1024 --cache-buster-id 600 \
   --output /path/to/results/2000-full.json
+```
+
+For a visually verified hybrid field, create a named crop with its source rectangle recorded, then issue an image-only narrow instruction. Do not use the crop output until it passes a source-image review.
+
+```bash
+# Rectangle coordinates are relative to the original rendered page.
+/root/venvs/ppstructurev3/bin/python scripts/create_ocr_verification_crops.py \
+  --input-dir /path/to/rendered-300dpi-pages \
+  --output-dir /path/to/verification-crops \
+  --crop signature-date=3:900,950,2100,1150
+
+/root/venvs/ppstructurev3/bin/python scripts/benchmark_vllm_ocr_modes.py \
+  --mode sequential --images /path/to/verification-crops/signature-date.png \
+  --max-tokens-per-page 128 --cache-buster-id 700 \
+  --instruction 'อ่านข้อความจากภาพเฉพาะบรรทัดลายมือชื่อและวันที่เท่านั้น ห้ามเดาคำที่อ่านไม่ชัด' \
+  --output /path/to/results/signature-date.json
 ```
 
 [`prepare_layout_ocr_images.py`](../scripts/prepare_layout_ocr_images.py) saves a `layout-manifest.json`, overlays, full-page images, and crop images. [`benchmark_vllm_ocr_modes.py`](../scripts/benchmark_vllm_ocr_modes.py) records per-request response text, token counts, finish reason, and E2E time; `sharded-batch` prevents a 24-image request from being conflated with a single context-length experiment.
