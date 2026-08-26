@@ -98,12 +98,23 @@ def batch_content(page_numbers: list[int], image_urls: list[str]) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("sequential", "batch"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("sequential", "batch", "sharded-batch"),
+        required=True,
+        help="sharded-batch sends fixed-size groups while recording each request separately.",
+    )
     parser.add_argument("--images", type=Path, nargs="+", required=True)
     parser.add_argument("--first-page", type=int, default=1)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--model", default="qwen3.8-27b")
     parser.add_argument("--max-tokens-per-page", type=int, default=700)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Images per request when --mode sharded-batch is selected.",
+    )
     parser.add_argument(
         "--cache-buster-id",
         type=int,
@@ -136,7 +147,7 @@ def main() -> None:
                     ),
                 }
             )
-    else:
+    elif args.mode == "batch":
         # A distinct id makes every test mode use a separate multimodal input
         # while leaving readable page content unchanged.
         results = [
@@ -157,6 +168,35 @@ def main() -> None:
                 ),
             }
         ]
+    else:
+        if args.batch_size < 1:
+            raise ValueError("--batch-size must be positive")
+        results = []
+        for offset in range(0, len(args.images), args.batch_size):
+            batch_paths = args.images[offset : offset + args.batch_size]
+            batch_pages = page_numbers[offset : offset + args.batch_size]
+            results.append(
+                {
+                    "pages": batch_pages,
+                    "images": [str(path) for path in batch_paths],
+                    **call_api(
+                        args.base_url,
+                        args.model,
+                        batch_content(
+                            batch_pages,
+                            [
+                                image_data_url(
+                                    path, args.cache_buster_id + page_number
+                                )
+                                for page_number, path in zip(
+                                    batch_pages, batch_paths, strict=True
+                                )
+                            ],
+                        ),
+                        args.max_tokens_per_page * len(batch_paths),
+                    ),
+                }
+            )
 
     elapsed = sum(row["elapsed_seconds"] for row in results)
     prompt_tokens = sum(row["prompt_tokens"] for row in results)
@@ -174,6 +214,7 @@ def main() -> None:
         "seconds_per_page": elapsed / len(args.images),
         "requests": results,
     }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({key: value for key, value in summary.items() if key != "requests"}, ensure_ascii=False, indent=2))
 

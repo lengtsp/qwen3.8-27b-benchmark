@@ -1,0 +1,152 @@
+# PP-DocLayoutV3 + Qwen OCR — 24-page resolution and crop sweep
+
+Date: 2026-08-26. This is an accuracy/latency comparison on one RTX PRO 6000 Blackwell Workstation Edition (96 GB), using the local Qwen3.8-27B vLLM service with BF16 weights, BF16 KV (`auto`), MTP 3, `max-model-len=81920`, and `max_pixels=3998400` as the server ceiling. Model loading is excluded.
+
+The source was the 24-page Thai cloud-security standard PDF supplied for this benchmark. It is **not** committed to this repository. Each page was rendered at 300 DPI, **2481 × 3508 px**. The PDF text layer was not used as ground truth because its Thai extraction is unreliable on some pages.
+
+## Result first
+
+**Primary OCR record: full-page 2000 px.** It has the best complete-page source-verified result: **92/96 = 95.8%** across four visual anchors per page, at **50.30 E2E output tok/s** and **11.25 s/page**.
+
+Do not replace it with the apparently higher-scoring PP-DocLayoutV3 crop. The 2200-px crop reaches **93/96 = 96.9%**, but intentionally removed the page-1 official gazette metadata and large title/issuer block. It is a useful **second pass for prose clauses/dates**, not an archival full-page OCR result.
+
+| Use case | Input | Source-verified result | Performance | Recommendation |
+| --- | --- | ---: | ---: | --- |
+| Primary transcript / search record | Full page, 2000 profile | **92/96 (95.8%)** | **50.30 tok/s**, **11.25 s/page** | **Use this** |
+| Faster complete-page draft | Full page, 1800 profile | 90/96 (93.8%) | 50.34 tok/s, 11.24 s/page | Use if the small quality loss is acceptable |
+| Extra check of prose/date clause | PP-DocLayoutV3 crop, 2200 profile | 93/96 (96.9%), **not complete page** | 51.37 tok/s, 10.85 s/page | Second pass only; retain full page |
+| 1400 px | Full page | Not valid for full-document comparison: pages 17–24 hit output cap | 57.01 tok/s, 12.86 s/page | Do not use this batching/output limit |
+
+## What “1400 / 1800 / 2000 / 2200” means here
+
+These are actual image inputs, not an enlarged `max_model_len` reservation. To keep Qwen's vision grid deterministic, the full A4 inputs were pre-resized to these exact 32-pixel-grid dimensions before sending them to the already-warm high-resolution server:
+
+| Profile name | Full-page input dimensions | Image area | Input-token observation, 24 pages |
+| --- | ---: | ---: | ---: |
+| 1400 | 960 × 1376 | 1.321 MP | 31,515 prompt tokens |
+| 1800 | 1280 × 1792 | 2.294 MP | 54,315 prompt tokens |
+| 2000 | 1408 × 1984 | 2.793 MP | 66,027 prompt tokens |
+| 2200 | 1536 × 2176 | 3.342 MP | 78,891 prompt tokens |
+
+The vLLM server's `max_pixels=3998400` (about a 2400-px A4 ceiling) remains above all these inputs, so it does not downsize them further. This experiment therefore isolates the delivered image resolution while holding weights, MTP depth, KV dtype, context ceiling, prompt, batching, and sampling fixed.
+
+## Full-page benchmark, all 24 pages
+
+Each profile uses three fresh HTTP requests of eight pages, `temperature=0`, Qwen thinking disabled, and a budget of 1,024 output tokens per page (8,192 max per request). Each run used cache-distinct image bytes. `E2E` begins when the client sends the request and ends when the complete response arrives; it includes image preprocessing, visual prefill, decoding, and API overhead, but not model startup.
+
+| Full-page profile | Prompt tokens | Output tokens | E2E elapsed | E2E output tok/s | Seconds/page | Finish status | Terra anchor score |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 1400 | 31,515 | 17,599 | 308.70 s | **57.01** | 12.86 | Batch 17–24 hit `length`; invalid full-doc comparison | — |
+| 1800 | 54,315 | 13,574 | 269.65 s | 50.34 | **11.24** | All three requests `stop` | 90/96 = 93.8% |
+| **2000** | **66,027** | **13,583** | **270.05 s** | **50.30** | **11.25** | All three requests `stop` | **92/96 = 95.8%** |
+| 2200 | 78,891 | 13,662 | 276.38 s | 49.43 | 11.52 | All three requests `stop` | 91/96 = 94.8% |
+
+The 1800- and 2000-px profiles have virtually the same observed latency, while 2000 adds two verified anchors. 2200 spends more image tokens and time without improving the complete-page score. The fast 1400 output-rate is misleading: its final eight-page response stopped at the 8,192-token limit, repeats text on page 24, and ends mid-sentence.
+
+### Every page checked by Codex Terra
+
+Terra visually compared each OCR response with the 300-DPI render. The rubric is **four page-specific anchors per page** (96 total), with whitespace normalized. An anchor is exact (`E`), wrong substitution (`W`), omitted (`O`), or hallucinated (`H`). It is deliberately **not a character-error-rate (CER) claim** and must not be read as document-perfect transcription.
+
+| Page | 1400 full | 1800 full | 2000 full | 2200 full | Anchor family / material observation |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | 2/4 | 2/4 | 2/4 | 2/4 | Gazette issue and effective-after-two-years clause are wrong at all sizes |
+| 2 | 4/4 | 4/4 | 4/4 | 4/4 | PaaS/SaaS, CSC/CSP, 30-day report |
+| 3 | 2/4 | 3/4 | 3/4 | 2/4 | Source date is 3 Sep 2567; several outputs say 30 Sep |
+| 4 | 1/4 | 2/4 | 3/4 | 3/4 | Appendix, meeting date/location, and statistics are fragile |
+| 5 | 4/4 | 4/4 | 4/4 | 4/4 | Governance sections / English standards |
+| 6 | 4/4 | 4/4 | 4/4 | 4/4 | Certification and assessment cycle |
+| 7 | 4/4 | 4/4 | 4/4 | 4/4 | ISO/IEC / CSA STAR / normative reference |
+| 8 | 4/4 | 3/4 | 4/4 | 4/4 | Four-column matrix retained, but headers/lists can mutate |
+| 9 | 4/4 | 4/4 | 4/4 | 4/4 | Policy table and two roles |
+| 10 | 4/4 | 4/4 | 4/4 | 4/4 | Organization/authority contacts; blank cell preserved |
+| 11 | 4/4 | 4/4 | 4/4 | 4/4 | Compliance, legislation, IP, records |
+| 12 | 4/4 | 4/4 | 4/4 | 4/4 | Cryptographic controls and independent review |
+| 13 | 4/4 | 4/4 | 4/4 | 4/4 | Infrastructure / HR / asset management |
+| 14 | 4/4 | 4/4 | 4/4 | 4/4 | Labelling/access controls; genuine blank cell preserved |
+| 15 | 4/4 | 4/4 | 4/4 | 4/4 | Privileged access/authentication/utilities |
+| 16 | 3/4 | 4/4 | 4/4 | 4/4 | Secure log-on and key management |
+| 17 | 4/4* | 4/4 | 4/4 | 4/4 | Key management / physical security |
+| 18 | 4/4* | 4/4 | 4/4 | 4/4 | Operations/change/capacity/backup |
+| 19 | 4/4* | 4/4 | 4/4 | 4/4 | Backup/logging/retention |
+| 20 | 4/4* | 4/4 | 4/4 | 4/4 | Operator logs/clock/vulnerabilities |
+| 21 | 4/4* | 4/4 | 4/4 | 4/4 | Transfer/network/SDLC |
+| 22 | 4/4* | 4/4 | 4/4 | 4/4 | Supplier agreements / six bullets |
+| 23 | 4/4* | 4/4 | 4/4 | 4/4 | Supply chain / incident management |
+| 24 | 1/4* | 4/4 | 4/4 | 4/4 | 1400 repeats/hallucinates due output cap |
+
+\* The 1400 final request is length-capped, so its apparent page 17–23 matches cannot establish a valid end-to-end document result.
+
+Full-page status totals: 1800 = `E90/W6/O0/H0`; 2000 = `E92/W4/O0/H0`; 2200 = `E91/W4/O1/H0`.
+
+### Errors that remain material at 2000 px
+
+The high score does not permit unverified regulatory transcription. In particular:
+
+| Page | Source visual fact | Observed issue |
+| ---: | --- | --- |
+| 1 | Gazette issue `๒๔๘`; effectiveness is **after two years** | All profiles mutate the issue and write the effective rule as the following day |
+| 3 | Date: 3 September 2567 | 1800 and 2200 change it to 30 September; commission wording also mutates in some profiles |
+| 4 | Appendix; meeting 22 Dec 2566; statistics include 632 / 155 / 148 and 515 / 336 / 301 | 2000 preserves the checked date/first values but still changes location, some statistics, and a threat term |
+| 8–24 | Visually structured role tables | The model creates readable ordered text, not geometry-faithful cells, CSV, or a safe cell-by-cell record |
+
+For legal titles, dates, gazette issue/section numbers, locations, numeric statistics, and every material table cell: retain the page image and run a focused crop/verification pass.
+
+## PP-DocLayoutV3 crop A/B
+
+PP-DocLayoutV3 was run on the original 300-DPI page to detect semantic regions. The `layout-content` variant takes the padded union of detected non-header/non-footer/non-page-number regions, then resizes **without changing aspect ratio**. It keeps image area at or below the matching full-page profile. This was a real pipeline run over all 24 pages; its JSON manifest records all boxes and crop rectangles.
+
+| Variant | Prompt tokens | Output tokens | E2E elapsed | E2E output tok/s | Seconds/page | Terra score | Complete-page safe? |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Full 1800 | 54,315 | 13,574 | 269.65 s | 50.34 | 11.24 | 90/96 = 93.8% | Yes |
+| Crop 1800 | 48,769 | 13,265 | 244.49 s | **54.25** | **10.19** | 90/96 = 93.8% | **No** — title removed |
+| Full 2200 | 78,891 | 13,662 | 276.38 s | 49.43 | 11.52 | 91/96 = 94.8% | Yes |
+| Crop 2200 | 71,466 | 13,379 | 260.43 s | 51.37 | 10.85 | **93/96 = 96.9%** | **No** — title/gazette metadata removed |
+
+Crop-page scores (1800 / 2200) were: p1 2/4 / 3/4, p2 4/4 / 4/4, p3 3/4 / 3/4, p4 2/4 / 3/4, p5–7 4/4 / 4/4, p8 3/4 / 4/4, p9–24 4/4 / 4/4. Status totals: crop-1800 = `E90/W5/O1/H0`; crop-2200 = `E93/W2/O1/H0`.
+
+The one crop omission is material: on page 1 the crop physically removes the official title/issuer and gazette metadata. It also does not make header policy reliable: page 3 still emits a wrong gazette header. Therefore:
+
+1. Keep **full-page 2000** as the main OCR record.
+2. Use **crop 2200** only as a second pass for a prose clause, date, or low-confidence text.
+3. For page 1/3 metadata, make a dedicated header crop; do not rely on automatic margin trimming.
+4. For pages 8–24, crop a **specific visual table row/cell** when an exact role-to-requirement association matters.
+
+## Installation and reproducible run
+
+PP-DocLayoutV3 is used for layout geometry, not Thai character recognition. Qwen remains the VLM OCR engine. The detector runs CPU-only in a separate Ubuntu-E environment, so it does not contend with the vLLM GPU service.
+
+```bash
+# Ubuntu-E: isolated CPU environment
+uv venv --python /usr/bin/python3 /root/venvs/ppstructurev3
+uv pip install --python /root/venvs/ppstructurev3/bin/python \
+  paddlepaddle 'paddleocr[doc-parser]' transformers
+uv pip install --python /root/venvs/ppstructurev3/bin/python \
+  --index-url https://download.pytorch.org/whl/cpu torch torchvision
+
+# Public 133-MB Transformer/safetensors detector, persistent local cache
+/root/venvs/ppstructurev3/bin/hf download \
+  PaddlePaddle/PP-DocLayoutV3_safetensors \
+  --local-dir /root/llm-cache/pp-doclayoutv3-safetensors
+
+# Build overlay, crop manifest, and all Qwen-grid input variants.
+/root/venvs/ppstructurev3/bin/python scripts/prepare_layout_ocr_images.py \
+  --input-dir /path/to/rendered-300dpi-pages \
+  --output-dir /path/to/ocr-ppdoclayoutv3 \
+  --model-dir /root/llm-cache/pp-doclayoutv3-safetensors \
+  --device cpu \
+  --profile 1400=960x1376 \
+  --profile 1800=1280x1792 \
+  --profile 2000=1408x1984 \
+  --profile 2200=1536x2176
+
+# Benchmark 24 full pages as three fresh eight-page requests.
+/root/venvs/ppstructurev3/bin/python scripts/benchmark_vllm_ocr_modes.py \
+  --mode sharded-batch --batch-size 8 \
+  --images /path/to/ocr-ppdoclayoutv3/images/2000/full/page-*.png \
+  --max-tokens-per-page 1024 --cache-buster-id 600 \
+  --output /path/to/results/2000-full.json
+```
+
+[`prepare_layout_ocr_images.py`](../scripts/prepare_layout_ocr_images.py) saves a `layout-manifest.json`, overlays, full-page images, and crop images. [`benchmark_vllm_ocr_modes.py`](../scripts/benchmark_vllm_ocr_modes.py) records per-request response text, token counts, finish reason, and E2E time; `sharded-batch` prevents a 24-image request from being conflated with a single context-length experiment.
+
+The relevant upstream references are [PP-DocLayoutV3 safetensors](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_safetensors/tree/main), [PaddleOCR layout detection](https://www.paddleocr.ai/latest/en/version3.x/module_usage/layout_detection.html), and [PP-StructureV3](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PP-StructureV3.html).

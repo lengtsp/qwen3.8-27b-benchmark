@@ -192,6 +192,21 @@ Rather than reloading the server to raise the whole-page ceiling to 2,700 px, tw
 
 Use the full-page result for ordinary text, then run a focused crop only for legally material fields, low-confidence spans, tables, dates and numeric statistics. Attach the page number and crop rectangle to each replacement; the crop must replace **only that field**, never silently rewrite the whole-page transcript. In this example, adding both targeted checks costs about **5.51 s** and raises the frozen key-field result from 19/21 to **21/21** for those checked fields. It does not establish whole-page/CER accuracy; page-4 statistics should receive the same crop-and-verify treatment.
 
+#### 24-page 300-DPI sweep: 1400 / 1800 / 2000 / 2200 px + PP-DocLayoutV3 crop
+
+The follow-up used **all 24 pages** of the supplied Thai cloud-security standard at 300 DPI (2,481 × 3,508 px/page), with the same vLLM MTP 3 + BF16-KV service kept warm. The names below are actual Qwen-grid image inputs—not empty context reservations—and the server's 3.998 MP vision ceiling stayed above every input. Codex Terra visually compared every page against its render with four page-specific anchors per page (96 total). This is a transparent field/anchor score, **not CER or a character-perfect OCR claim**.
+
+| Variant, 24 pages | Actual input / prompt tokens | E2E output tok/s | Seconds/page | Terra anchors | Operational decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| Full 1400 | 960 × 1376; 31,515 | **57.01** | 12.86 | Invalid: last eight-page request hit output cap | Do not use this batch/output limit |
+| Full 1800 | 1280 × 1792; 54,315 | 50.34 | **11.24** | 90/96 = 93.8% | Faster complete-page draft |
+| **Full 2000** | **1408 × 1984; 66,027** | **50.30** | **11.25** | **92/96 = 95.8%** | **Best primary full-page OCR** |
+| Full 2200 | 1536 × 2176; 78,891 | 49.43 | 11.52 | 91/96 = 94.8% | More image cost, no quality gain |
+| PP-DocLayoutV3 crop 1800 | layout content; 48,769 | 54.25 | 10.19 | 90/96 = 93.8% | Not archival: page-1 title is removed |
+| PP-DocLayoutV3 crop 2200 | layout content; 71,466 | 51.37 | 10.85 | **93/96 = 96.9%** | Second-pass clause/date check only; header/title metadata is removed |
+
+The correct workflow is **full-page 2000** as the OCR record, followed by a targeted crop only for legally material dates, gazette/section numbers, locations, statistics, or a table row/cell. Automatic content cropping improves speed and local legibility but cannot replace the official header/title or reconstruct geometry-faithful table cells. The exact per-page scores, error types, crop policy, installation, and reproducible commands are in [`docs/ppdoclayoutv3-24-page-sweep.md`](docs/ppdoclayoutv3-24-page-sweep.md). PP-DocLayoutV3 is installed locally at `/root/llm-cache/pp-doclayoutv3-safetensors` and runs CPU-only in `/root/venvs/ppstructurev3`, independently of the vLLM GPU service.
+
 ### Long input + long output: fixed 4,096-token completion
 
 This is the primary "read a long document, then write a long answer" probe. The 8K/32K/80K/120K labels below are **total-sequence profiles** (input plus output), not input sizes by themselves. Every row sends the stated **actual API prompt tokens** and receives exactly **4,096 completion tokens** (`finish_reason=length`). The server was warm, model startup/CUDA-graph capture and one discarded warm-up request are excluded, and every configuration used `max-model-len=122880` so the input plus output fits the 120K deployment setting.
