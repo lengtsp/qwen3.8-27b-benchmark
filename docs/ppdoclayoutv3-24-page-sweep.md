@@ -315,6 +315,80 @@ baseline, followed by automatic layout crops only for material fields and
 tables.  Keep the original page image as the authority and accept a field only
 after independent agreement or source-image review.
 
+#### Native 300-DPI full page — 2481 px wide, no 1800-px downscale
+
+The requested high-resolution control sent every original **2481 × 3508 px**
+page to Typhoon unchanged.  This is intentionally outside Typhoon's documented
+1,800-px image policy, and is a test of whether the added vision tokens improve
+source-verified text or structure enough to justify the latency.
+
+```bash
+# 3508 is the source long side, so each 2481-px-wide 300-DPI page is unchanged.
+/opt/vllm/bin/python scripts/run_typhoon_full_page_ocr.py \
+  --input-dir /path/to/rendered-300dpi-pages \
+  --typhoon-model-readme /root/llm-cache/typhoon-ocr1.5-2b/README.md \
+  --target-long-side 3508 --max-tokens 4096 \
+  --output /path/to/results/typhoon-pure-fullpage-300dpi-native.json
+
+# Evaluation only: rejects corrupt PDF text and table-geometry pages rather
+# than letting them masquerade as a valid word-error reference.
+/opt/vllm/bin/python scripts/evaluate_ocr_against_pdf_text.py \
+  --pdf /path/to/source.pdf \
+  --ocr-results /path/to/results/typhoon-pure-fullpage-300dpi-native.json \
+  --layout-manifest /path/to/ocr-ppdoclayoutv3/layout-manifest.json \
+  --output /path/to/results/typhoon-native-clean-prose-ncer.json
+```
+
+| Metric | Typhoon policy input (1273 × 1800) | Native 300 DPI (2481 × 3508) |
+| --- | ---: | ---: |
+| Prompt / completion tokens | 59,352 / 28,477 | 211,512 / 28,553 |
+| 24-page E2E | 106.121 s | 156.738 s |
+| Median page E2E | 4.603 s | 6.706 s |
+| Aggregate output throughput | 268.35 tok/s | 182.17 tok/s |
+| Finish reason | 24/24 `stop` | 24/24 `stop` |
+| Frozen visual anchors | **96 / 96** | **95 / 96** |
+| Clean-prose nCER | 491 / 9,363 = **5.244%** | 491 / 9,363 = **5.244%** |
+
+The nCER reference subset is only pages 4–7: pages 1–3 have 21.5–24.2%
+control-character corruption in their PDF text layer, and pages 8–24 contain
+detected tables whose PDF text-stream order cannot fairly score visual table
+geometry.  nCER is format-insensitive character error, **not** Thai word error
+rate.  Native 300 DPI did not improve this clean-prose subset, while adding
+46% median page latency and reducing output throughput by 32%.  It also loses
+one frozen visual anchor: page 1's official title drops `การ` from
+`ประกาศคณะกรรมการการรักษาความมั่นคงปลอดภัยไซเบอร์แห่งชาติ`.
+
+Terra also performed a complete visual audit of the native output.  It found
+**9 source-verified word/numeral/identifier error occurrences**; this is an
+observed count, not a WER/CER denominator because the complete human transcript
+does not exist and pages 1–3 have unusable extracted text.
+
+| Page | Source image | Native Typhoon output | Occurrences |
+| ---: | --- | --- | ---: |
+| 1 | `ประกาศคณะกรรมการการรักษาความมั่นคงปลอดภัยไซเบอร์แห่งชาติ` | Drops `การ` after `คณะกรรมการ` | 1 |
+| 2 | Name of the office / two cited announcements contain `คณะกรรมการการรักษา` | Drops `การ` in all three occurrences | 3 |
+| 4 | `๑๕๕` | `๑๔๕` | 1 |
+| 10 | `IaaS` | `laaS` | 2 |
+| 15 | `อรรถประโยชน์` | `ออรรถประโยชน์` | 1 |
+| 24 | `การจัดการปัญหา` | `การปัญหา` | 1 |
+
+For **document-structure fidelity**, Terra used 24 reading-order/heading/list
+boundary units (one per page) and the 50 table regions detected by
+PP-DocLayoutV3.  This is an evaluation aid only; PP-DocLayoutV3 was not an
+input to Typhoon.
+
+| Structure component | Correct / total | Result |
+| --- | ---: | --- |
+| Reading order, heading, and list boundary | 24 / 24 | 100.0% |
+| Table row/column/cell relationship | 49 / 50 | 98.0% |
+| **Combined structural ratio** | **73 / 74** | **98.65%** |
+
+Native 300 DPI repaired the medium/high table-row pairing that was wrong in
+the earlier 1800-px page-8 output.  It still fails one table region: page 24's
+first table assigns `ค) เหตุภัยคุกคาม...` to the provider/right cell when the
+source places it in the user/left cell.  Consequently, native resolution is a
+useful targeted table retry, not the default for every text-heavy page.
+
 #### Warm-server four-field validation — automatic crops
 
 The candidate builder was run over all 24 source pages and made **165**
