@@ -23,7 +23,39 @@ vllm serve /root/llm-cache/qwen3.8-27b \
   --gpu-memory-utilization 0.90
 ```
 
-### vLLM + MTP (recommended for text, code, and OCR)
+### vLLM + MTP 1 (comparison / lowest speculative depth)
+
+```bash
+vllm serve /root/llm-cache/qwen3.8-27b \
+  --host 127.0.0.1 --port 8000 \
+  --served-model-name qwen3.8-27b \
+  --dtype bfloat16 \
+  --max-model-len 32768 \
+  --max-num-seqs 128 \
+  --limit-mm-per-prompt '{"image":16}' \
+  --mm-processor-kwargs '{"max_pixels":1048576}' \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":1}' \
+  --kv-cache-dtype auto \
+  --gpu-memory-utilization 0.90
+```
+
+### vLLM + MTP 2 (comparison / middle speculative depth)
+
+```bash
+vllm serve /root/llm-cache/qwen3.8-27b \
+  --host 127.0.0.1 --port 8000 \
+  --served-model-name qwen3.8-27b \
+  --dtype bfloat16 \
+  --max-model-len 32768 \
+  --max-num-seqs 128 \
+  --limit-mm-per-prompt '{"image":16}' \
+  --mm-processor-kwargs '{"max_pixels":1048576}' \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":2}' \
+  --kv-cache-dtype auto \
+  --gpu-memory-utilization 0.90
+```
+
+### vLLM + MTP 3 (Best recommended — text, coding, and page-by-page OCR)
 
 ```bash
 vllm serve /root/llm-cache/qwen3.8-27b \
@@ -39,7 +71,23 @@ vllm serve /root/llm-cache/qwen3.8-27b \
   --gpu-memory-utilization 0.90
 ```
 
-The only inference-mode difference is `--speculative-config`. Do **not** add `--enforce-eager`; the tested graph-mode service reports `enforce_eager=False`.
+### vLLM + MTP 3 + FP8 KV (Best recommended — 80K–120K long input + long output, after task-quality validation)
+
+```bash
+vllm serve /root/llm-cache/qwen3.8-27b \
+  --host 127.0.0.1 --port 8000 \
+  --served-model-name qwen3.8-27b \
+  --dtype bfloat16 \
+  --max-model-len 122880 \
+  --max-num-seqs 128 \
+  --limit-mm-per-prompt '{"image":16}' \
+  --mm-processor-kwargs '{"max_pixels":1048576}' \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+  --kv-cache-dtype fp8_e4m3 \
+  --gpu-memory-utilization 0.90
+```
+
+Run exactly one profile at a time because these examples all bind to port `8000`. Compared with regular vLLM, the only inference-mode difference in the MTP 1/2/3 BF16 examples is `--speculative-config`; the long-context FP8 example also intentionally changes context length and KV-cache dtype. Do **not** add `--enforce-eager`; the tested graph-mode service reports `enforce_eager=False`.
 
 | Situation | `--max-model-len` | `--kv-cache-dtype` | vLLM regular | vLLM + MTP (recommended) |
 | --- | ---: | --- | --- | --- |
