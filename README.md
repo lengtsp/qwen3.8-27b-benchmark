@@ -173,11 +173,11 @@ Choose **FlashInfer + FP8 KV** only when its extra KV capacity/concurrency is ne
 
 For a brand-new one-page document immediately after startup, the controlled cold sample made regular vLLM faster (40.273 s vs 51.416 s), because MTP compiled speculative/vision kernels during that request. After warm-up, the paired warm-server/cold-image test showed MTP at 54.56 tok/s versus 30.34 tok/s for regular vLLM. The 55.39 tok/s same-image result remains cache-assisted and should not be treated as new-document latency.
 
-## Cold-load time observed
+## Cold-load time observed (WD Black 3.5-inch HDD)
 
 | Model | Time until `llama-server` reported `model loaded` |
 | --- | ---: |
 | UD-Q6_K_XL | 17 min 15 s |
 | UD-Q8_K_XL | 6 min 35 s |
 
-This variance was storage-cache/I/O dependent and is separate from inference speed. Keeping files on Ubuntu-E ext4 avoids the Windows-mounted path, but the first GGUF read still takes time.
+The Ubuntu-E ext4 volume/model cache is physically stored on a **WD Black 3.5-inch mechanical HDD**. Cold-loading the 25–52 GB GGUF/BF16 model files therefore spends substantial time on mechanical-disk reads (and host page-cache state), which explains the multi-minute variance. This is a **startup I/O cost**, not serving/inference TPS. Keeping files on Ubuntu-E ext4 still avoids the additional overhead of loading from a Windows-mounted path; moving the cache to an SSD/NVMe would be the relevant way to reduce cold-load time.
