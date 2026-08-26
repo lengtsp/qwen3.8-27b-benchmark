@@ -266,6 +266,55 @@ VLLM_WSL2_ENABLE_PIN_MEMORY=1 VLLM_PLUGINS='' \
   --output /path/to/results/typhoon-p1-header.json
 ```
 
+#### Pure full-page Typhoon run — no Qwen, layout, crop, or PDF text
+
+Typhoon was also run directly against every one of the 24 original rendered
+pages.  The pure-page runner sends exactly one image and Typhoon's required
+prompt per HTTP request; it does not invoke Qwen, PP-DocLayoutV3, a crop, or
+the PDF text layer.  The server was already warm, so this measures ordinary
+page processing—not Typhoon model startup.
+
+```bash
+/opt/vllm/bin/python scripts/run_typhoon_full_page_ocr.py \
+  --input-dir /path/to/rendered-300dpi-pages \
+  --typhoon-model-readme /root/llm-cache/typhoon-ocr1.5-2b/README.md \
+  --output /path/to/results/typhoon-pure-fullpage-1800.json \
+  --max-tokens 4096
+```
+
+| Pure Typhoon setting | Observed value |
+| --- | ---: |
+| Source / image sent | 24 × 2481 × 3508 px / 24 × 1273 × 1800 px |
+| HTTP pattern | 24 requests, one complete page per request |
+| Prompt / completion tokens | 59,352 / 28,477 |
+| All-page E2E | 106.121 s |
+| Aggregate output throughput | 268.35 tok/s |
+| Aggregate total throughput | 827.63 tok/s |
+| Median page E2E (min–max) | 4.603 s (1.653–5.625 s) |
+| Finish reason | 24/24 `stop`; no completion hit the 4,096-token ceiling |
+
+Throughput is an aggregate accounting figure over 24 sequential requests, not
+the per-page interactive rate.  The page E2E row is the relevant user-facing
+latency.  Codex Terra visually checked the same frozen four-anchor-per-page
+rubric used by the Qwen sweep: **24/24 pages × 4/4 anchors = 96/96 (100.0%)**.
+That is a substantial improvement over full-page Qwen 2000's 92/96 on this
+specific rubric, but it is not character error rate or a claim that every
+page/table is perfect.
+
+The strict review found these unscored failures, which must remain visible in
+any production decision:
+
+| Page | Source image | Pure Typhoon output | Consequence |
+| ---: | --- | --- | --- |
+| 4 | Second-rank count `๑๕๕` | `๑๔๕` | Do not trust unverified statistics/numeric fields. |
+| 8 | Table cell-to-row relationships | Markdown/HTML serialisation flattens or mis-associates medium/high rows | Do not treat its table HTML as geometry-faithful cell data. |
+| 10 | `IaaS` | `laaS` | Preserve/verify technical identifiers. |
+
+Therefore the recommended pure Typhoon workflow is a strong page-by-page OCR
+baseline, followed by automatic layout crops only for material fields and
+tables.  Keep the original page image as the authority and accept a field only
+after independent agreement or source-image review.
+
 #### Warm-server four-field validation — automatic crops
 
 The candidate builder was run over all 24 source pages and made **165**
