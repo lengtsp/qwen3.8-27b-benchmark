@@ -53,6 +53,26 @@ These results were independently re-checked visually by Codex Terra against the 
 
 The `Cloud First Policy` row above awards the literal English term. If the checkpoint instead requires the complete Thai-and-English policy name, BF16 stays 12/21 while FP8 is **11/21 (52.4%)** because its Thai wording is changed. An additional non-comparable FP8 page-4-only probe scored 6/11 (54.5%) and also altered the title, meeting date and statistics. It is not included in the 21-field total because there is no matching BF16 page-4-only run.
 
+## 300 DPI / 2,400 px high-resolution validation: 19 / 21 correct (90.5%)
+
+This follow-up is a new **BF16-only** test, not a BF16-versus-FP8 comparison. The PDF pages were rendered at 300 DPI (**2,481 × 3,508 px, 8.70 MP** per source page) and submitted to MTP 3 + BF16 KV at `max-model-len=81920`. The Qwen processor used `max_pixels=3,998,400`, an area limit which yields approximately **1,664 × 2,368 px (3.94 MP)** on this A4 aspect ratio; the long side therefore remains within the 2,400 px target. The primary model load from the stated WD Black 3.5-inch HDD took 709.73 s, excluded from every request metric below.
+
+The same frozen rubric combines the high-resolution page-1 single-page response and page 4 from the high-resolution eight-page request:
+
+| Profile | Correct fields | Incorrect fields | Strict field accuracy | Field error / mutation rate |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MP, MTP 3 + BF16 KV baseline | 12 / 21 | 9 / 21 | 57.1% | 42.9% |
+| **300 DPI / 2,400 px, MTP 3 + BF16 KV** | **19 / 21** | **2 / 21** | **90.5%** | **9.5%** |
+
+The high-resolution response now correctly preserves the page-1 title, opening legal citation and 31 July meeting date, as well as the page-4 appendix heading, full policy name, 22 December meeting date, and `๖๓๒` figure. The two failed rubric fields are:
+
+| Visual checkpoint | Expected value | High-resolution OCR |
+| --- | --- | --- |
+| Gazette issue | `เล่ม ๑๔๑ ตอนพิเศษ ๒๔๘ ง` | Incorrect: `๒๕๘ ง` |
+| Effective-date rule | Effective after two years from publication | Incorrect: changed to the following day |
+
+The 19/21 figure remains an **anchor-field score only**. It must not be presented as whole-page or character accuracy: outside this rubric, page 4 still changes some ranking statistics (for example 145/148 becomes 185/158) and threat labels/counts. A human must verify exact legal and numerical material from the original page.
+
 ## Interpretation
 
-At 1 MP effective resolution, Qwen3.8-27B is useful for locating sections, headings, familiar English terms, and a first-pass Thai transcription. It is not reliable for exact legal titles, government dates, issue numbers, legal effective dates, or numerical claims in this source. The 21-field score is intentionally only an anchor-field metric, not a full-page score: both outputs also altered unscored page-4 statistics, the `1.3 ฐานอำนาจ` heading, and the cited legal authority. It is **not CER**; calculating CER would require complete normalized ground truth plus alignment, while these responses are capped and can be truncated. The benchmark therefore recommends MTP 3 + BF16 KV for speed/quality between these two vLLM profiles, with mandatory image/PDF verification of every final regulatory value.
+At 1 MP effective resolution, Qwen3.8-27B is useful for locating sections, headings, familiar English terms, and a first-pass Thai transcription. The 300-DPI/2,400 px profile materially improves the measured anchor fields, but it is still not reliable for every exact legal title, government date, issue number, legal effective date, or numerical claim in this source. The 21-field score is intentionally only an anchor-field metric, not a full-page score: the high-resolution output still alters unscored page-4 statistics and threat labels. It is **not CER**; calculating CER would require complete normalized ground truth plus alignment, while these responses are capped and can be truncated. The benchmark therefore recommends MTP 3 + BF16 KV at 300 DPI / 2,400 px for accuracy-first OCR, with mandatory image/PDF verification of every final regulatory value.

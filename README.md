@@ -71,6 +71,24 @@ vllm serve /root/llm-cache/qwen3.8-27b \
   --gpu-memory-utilization 0.90
 ```
 
+### vLLM + MTP 3, high-resolution OCR (Best recommended — accuracy-first Thai regulatory OCR)
+
+Use this profile for 300-DPI A4 source pages when exact headings and dates are more important than latency. `max_pixels` is an **area** limit: `3,998,400` processes this 2,481 × 3,508 source at approximately **1,664 × 2,368 px**, keeping its long side within the requested 2,400 px ceiling.
+
+```bash
+vllm serve /root/llm-cache/qwen3.8-27b \
+  --host 127.0.0.1 --port 8000 \
+  --served-model-name qwen3.8-27b \
+  --dtype bfloat16 \
+  --max-model-len 81920 \
+  --max-num-seqs 128 \
+  --limit-mm-per-prompt '{"image":16}' \
+  --mm-processor-kwargs '{"max_pixels":3998400}' \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+  --kv-cache-dtype auto \
+  --gpu-memory-utilization 0.90
+```
+
 ### vLLM + MTP 3 + FP8 KV (Best recommended — 80K–120K long input + long output, after task-quality validation)
 
 ```bash
@@ -94,6 +112,7 @@ Run exactly one profile at a time because these examples all bind to port `8000`
 | Text/chat | 12,288 | `auto` | use the baseline command above with `12288` | `bash scripts/run_vllm_profile.sh text` |
 | Coding / agent | 32,768 | `auto` | use the baseline command above | `bash scripts/run_vllm_profile.sh code` |
 | OCR page-by-page | 32,768 | `auto` | use the baseline command above | `bash scripts/run_vllm_profile.sh ocr` |
+| OCR, 300-DPI A4 / 2,400 px long-side ceiling | 81,920 | `auto` | use the high-resolution command above without MTP | use the high-resolution MTP 3 command above |
 | 80K long document, accuracy first | 81,920 | `auto` | use the baseline command above with `81920` | `bash scripts/run_vllm_profile.sh long-80k-quality` |
 | 80K long document, more concurrent users | 81,920 | `fp8_e4m3` | use the baseline command above with `81920` / `fp8_e4m3` | `bash scripts/run_vllm_profile.sh long-80k-capacity` |
 | 120K long document, accuracy first | 122,880 | `auto` | use the baseline command above with `122880` | `bash scripts/run_vllm_profile.sh long-120k-quality` |
@@ -140,13 +159,27 @@ Both servers used Qwen native **MTP 3**, `max-model-len=32768`, BF16 weights, gr
 
 For this document at a 1 MP/page effective input, batch-4 BF16 lowers total request time from 42.11 s to 40.67 s versus four separate requests, but it produces fewer transcription tokens. The fairest operational comparison is therefore **seconds per page plus the output length**, not tok/s alone. Batch-8 remains practical at 11.59 s/page. FP8 expanded the 32K KV cache from **365,394 tokens / 11.15 context-sized requests** to **597,767 / 18.24**, but it did not improve one-user OCR latency in any of these runs.
 
-#### Accuracy check: useful transcription, not character-perfect OCR
+#### 1 MP baseline accuracy check: useful transcription, not character-perfect OCR
 
 Visual review used the rendered pages as the authority because the PDF's embedded Thai text layer is corrupted on some pages. Both BF16 and FP8 correctly retained the gazette date **10 September 2567**, the `Cloud Computing` term, and the page-4 headings `1. บทนำ` / `Cloud First Policy`. However, both outputs changed legally meaningful text: BF16 read the exact title phrase `ระบบคลาวด์` as `ระดับคลาวด์`, while FP8 read it as `ระดับชาติ`; both also changed the page-1 meeting date (**31 July 2567** in the image, **30 July** in the outputs) and the legal effective-date rule (**after two years** in the image, **the following day** in the outputs). On page 4 both produced an incorrect meeting date (the image says **22 December 2566**, while the transcription said **26 March 2566**) and invented or altered numeric statistics. The strict conclusion is: **fast and useful for draft extraction/search, but not accurate enough for unverified legal or regulatory transcription at 1 MP/page.** Use page citations plus image/PDF verification for final values, names, dates and legal titles. BF16 is the accuracy-first default between these two tested profiles; FP8 is a capacity/concurrency option, not the latency or OCR-quality default here.
 
 Codex Terra independently re-checked the rendered images and corrected the comparable **21-field visual rubric** to **12/21 = 57.1% strict field accuracy** and **9/21 = 42.9% field error/mutation rate** for both BF16 and FP8. If the policy field requires the complete Thai-and-English phrase rather than its literal English term, FP8 is **11/21 = 52.4%**. The exact checks, expected visual values, and each model's mutations are in [`docs/cloud-standard-ocr-quality.md`](docs/cloud-standard-ocr-quality.md). This is not a character-accuracy claim for the whole PDF; it is a transparent score for regulatory fields where a plausible but changed value must count as wrong.
 
 Reproduce the request patterns with [`scripts/benchmark_vllm_ocr_modes.py`](scripts/benchmark_vllm_ocr_modes.py). It records API-reported prompt/completion tokens, E2E elapsed time and full OCR responses without bundling the source PDF in this repository.
+
+#### 300 DPI / 2,400 px high-resolution validation: MTP 3 + BF16 KV
+
+The same pages were re-rendered at **300 DPI: 2,481 × 3,508 px = 8.70 MP per source page**. The high-resolution server used `max-model-len=81920`, MTP 3, BF16 KV (`auto`) and `max_pixels=3,998,400`; Qwen's 32-pixel grid therefore processed each A4 page at approximately **1,664 × 2,368 px = 3.94 MP**, with the long side below 2,400 px. This is BF16-only validation; do not assume the same quality result for FP8 KV without a matching run. The cold start read the 51.75-GiB checkpoint from the Ubuntu-E ext4 volume on the stated WD Black 3.5-inch HDD: vLLM logged **709.73 s** to load the main weights and **794.33 s** for target plus MTP drafter; neither is included below.
+
+| High-resolution request | Actual prompt tokens | Actual completion tokens | E2E elapsed | E2E output tok/s | Seconds / page |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 page | 3,955 | 612 | **9.69 s** | **63.16** | **9.69** |
+| 4 pages in one request | 15,536 | 2,215 | 52.81 s | 41.94 | 13.20 |
+| 8 pages in one request | 30,964 | 5,230 | 123.94 s | 42.20 | 15.49 |
+
+These are warm E2E figures after one discarded 64-token request. The direct one-page result should **not** be read as a general speedup from resolution: it has a different completion length and normal run-to-run variance. The robust cost signal is multi-page latency: compared with 1 MP BF16, batch-4 rises from 10.17 to 13.20 s/page and batch-8 from 11.59 to 15.49 s/page.
+
+On the same frozen 21-field visual rubric (page 1 by itself plus page 4 within the eight-page batch), high resolution scores **19/21 = 90.5%** strict anchor-field accuracy versus the 1 MP BF16 baseline's **12/21 = 57.1%**. The two remaining scored errors are the gazette issue `๒๔๘` read as `๒๕๘`, and the effective-date rule (the image says **after two years**, while the output says the following day). It still is **not character-perfect OCR**: unscored page-4 statistics and some threat labels remain changed, so regulatory values must be verified against the page image/PDF. See the full rubric in [`docs/cloud-standard-ocr-quality.md`](docs/cloud-standard-ocr-quality.md).
 
 ### Long input + long output: fixed 4,096-token completion
 
