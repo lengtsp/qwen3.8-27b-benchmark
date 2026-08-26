@@ -121,6 +121,31 @@ Same-input configurations are compared within each row. All single-request figur
 
 \* MTP 1 and MTP 2 code outputs hit the 384-token cap. MTP 3 stopped naturally after a complete 322-token solution, so the code row shows a useful operational result but is not a quality-normalized output-length comparison.
 
+### Thai cloud-security standard OCR: page-by-page versus multi-page batches
+
+This fresh evaluation uses the 24-page PDF **`[สกมช] มาตรฐานด้านการรักษาความมั่นคงปลอดภัยไซเบอร์ระบบคลาวด์ พ.ศ. ๒๕๖๗.pdf`** (not committed to this repository). Pages 1–8 were rendered at 144 DPI. Each source image is **1,191 × 1,684 px = 2,005,644 px (2.01 MP)**, while each vLLM server was deliberately capped at **`max_pixels=1,048,576` (1.05 MP) per page**. Thus, the table measures the same effective vision-resolution ceiling for both cache types, rather than native-resolution OCR.
+
+Both servers used Qwen native **MTP 3**, `max-model-len=32768`, BF16 weights, graph mode and a 700-token/page output cap. Page 5 was sent as a discarded warm-up request; every measured mode used a different one-pixel margin variant of the same rendered page so no mode could reuse another mode's multimodal encoder cache. The BF16 service used FlashAttention 2. The FP8 service used FlashInfer for text/KV attention and FlashAttention 2 for the vision encoder; vLLM limited its graph mode to `PIECEWISE` because FlashInfer + speculative decoding does not support full decode graphs in this build.
+
+| Server / KV cache | OCR mode | Pages / HTTP requests | Actual prompt tokens | Actual completion tokens | E2E elapsed | E2E output tok/s | Seconds / page |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **MTP 3 + BF16 KV (best measured for this OCR)** | 1 page | 1 / 1 | 1,095 | 643 | **11.24 s** | **57.21** | **11.24** |
+| MTP 3 + FP8 E4M3 KV | 1 page | 1 / 1 | 1,095 | 623 | 11.81 s | 52.76 | 11.81 |
+| **MTP 3 + BF16 KV (best measured for this OCR)** | 4 pages, one request per page | 4 / 4 | 4,380 | 2,240 | **42.11 s** | **53.19** | **10.53** |
+| MTP 3 + FP8 E4M3 KV | 4 pages, one request per page | 4 / 4 | 4,380 | 2,206 | 45.55 s | 48.43 | 11.39 |
+| **MTP 3 + BF16 KV (best measured for this OCR)** | 4 pages in one request | 4 / 1 | 4,096 | 2,097 | **40.67 s** | **51.56** | **10.17** |
+| MTP 3 + FP8 E4M3 KV | 4 pages in one request | 4 / 1 | 4,096 | 2,195 | 44.03 s | 49.86 | 11.01 |
+| **MTP 3 + BF16 KV (best measured for this OCR)** | 8 pages in one request | 8 / 1 | 8,084 | 5,211 | **92.75 s** | **56.18** | **11.59** |
+| MTP 3 + FP8 E4M3 KV | 8 pages in one request | 8 / 1 | 8,084 | 5,218 | 93.76 s | 55.65 | 11.72 |
+
+For this document at a 1 MP/page effective input, batch-4 BF16 lowers total request time from 42.11 s to 40.67 s versus four separate requests, but it produces fewer transcription tokens. The fairest operational comparison is therefore **seconds per page plus the output length**, not tok/s alone. Batch-8 remains practical at 11.59 s/page. FP8 expanded the 32K KV cache from **365,394 tokens / 11.15 context-sized requests** to **597,767 / 18.24**, but it did not improve one-user OCR latency in any of these runs.
+
+#### Accuracy check: useful transcription, not character-perfect OCR
+
+Visual review used the rendered pages as the authority because the PDF's embedded Thai text layer is corrupted on some pages. Both BF16 and FP8 correctly retained the gazette date **10 September 2567**, the `Cloud Computing` term, and the page-4 headings `1. บทนำ` / `Cloud First Policy`. However, both outputs changed legally meaningful text: BF16 read the exact title phrase `ระบบคลาวด์` as `ระดับคลาวด์`, while FP8 read it as `ระดับชาติ`; on page 4 both also produced an incorrect meeting date (the image says **22 December 2566**, while the transcription said **26 March 2566**) and invented or altered some numeric statistics. The strict conclusion is: **fast and useful for draft extraction/search, but not accurate enough for unverified legal or regulatory transcription at 1 MP/page.** Use page citations plus image/PDF verification for final values, names, dates and legal titles. BF16 is the accuracy-first default between these two tested profiles; FP8 is a capacity/concurrency option, not the latency or OCR-quality default here.
+
+Reproduce the request patterns with [`scripts/benchmark_vllm_ocr_modes.py`](scripts/benchmark_vllm_ocr_modes.py). It records API-reported prompt/completion tokens, E2E elapsed time and full OCR responses without bundling the source PDF in this repository.
+
 ### Long input + long output: fixed 4,096-token completion
 
 This is the primary "read a long document, then write a long answer" probe. The 8K/32K/80K/120K labels below are **total-sequence profiles** (input plus output), not input sizes by themselves. Every row sends the stated **actual API prompt tokens** and receives exactly **4,096 completion tokens** (`finish_reason=length`). The server was warm, model startup/CUDA-graph capture and one discarded warm-up request are excluded, and every configuration used `max-model-len=122880` so the input plus output fits the 120K deployment setting.
