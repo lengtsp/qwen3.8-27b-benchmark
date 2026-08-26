@@ -213,22 +213,96 @@ uv pip install --python /root/venvs/ppstructurev3/bin/python \
   --output /path/to/results/2000-full.json
 ```
 
-For a visually verified hybrid field, create a named crop with its source rectangle recorded, then issue an image-only narrow instruction. Do not use the crop output until it passes a source-image review.
+### Automatic detail candidates — no fixed bounding boxes
+
+The prior four-field repair experiment used source-reviewed rectangles to
+isolate known errors.  Those rectangles are retained only as historical
+evaluation evidence; they are **not** a reusable OCR policy and must not be
+copied to a different document.  A production repair path needs to discover
+every crop from the document itself.
+
+[`build_auto_layout_ocr_candidates.py`](../scripts/build_auto_layout_ocr_candidates.py)
+does that from PP-DocLayoutV3's `layout-manifest.json`.  It reconstructs
+header/footer/page-number lines from vertical alignment, emits every detected
+semantic block, and splits only a *detected* over-height text block into
+overlapping tiles.  Padding is a fraction of that region's own geometry—not a
+page coordinate.  The output manifest records the original detector boxes,
+the resulting crop, reading order, source hash, and the image dimensions sent
+to the OCR reader.
 
 ```bash
-# Rectangle coordinates are relative to the original rendered page.
-/root/venvs/ppstructurev3/bin/python scripts/create_ocr_verification_crops.py \
-  --input-dir /path/to/rendered-300dpi-pages \
-  --output-dir /path/to/verification-crops \
-  --crop signature-date=3:900,950,2100,1150
-
-/root/venvs/ppstructurev3/bin/python scripts/benchmark_vllm_ocr_modes.py \
-  --mode sequential --images /path/to/verification-crops/signature-date.png \
-  --max-tokens-per-page 128 --cache-buster-id 700 \
-  --instruction 'อ่านข้อความจากภาพเฉพาะบรรทัดลายมือชื่อและวันที่เท่านั้น ห้ามเดาคำที่อ่านไม่ชัด' \
-  --output /path/to/results/signature-date.json
+# Generates detail evidence for every detected region; no --crop X,Y,R,B input.
+/root/venvs/ppstructurev3/bin/python scripts/build_auto_layout_ocr_candidates.py \
+  --layout-manifest /path/to/ocr-ppdoclayoutv3/layout-manifest.json \
+  --output-dir /path/to/ocr-auto-candidates \
+  --model-max-side 1800
 ```
+
+### Typhoon OCR as independent evidence
+
+Typhoon OCR 1.5-2B is installed persistently in Ubuntu-E at
+`/root/llm-cache/typhoon-ocr1.5-2b` (4.0 GB, BF16).  It is a separate
+Qwen3-VL 2B OCR model, so it can read the automatic crops as an independent
+second opinion rather than asking Qwen3.8 to validate its own text.  Its model
+card is prompt-specific: use the supplied OCR prompt verbatim, `temperature=0`,
+and its 1,800-px image policy.  Do not repurpose it for arbitrary
+question-answering over a crop.
+
+```bash
+# A deliberately small VRAM reservation for Typhoon while Qwen is stopped.
+# The official card documents a 49,152-token configuration; 16K is sufficient
+# for one 1,800-px detail candidate and leaves the RTX PRO 6000 available.
+VLLM_WSL2_ENABLE_PIN_MEMORY=1 VLLM_PLUGINS='' \
+  /opt/vllm/bin/vllm serve /root/llm-cache/typhoon-ocr1.5-2b \
+  --served-model-name typhoon-ocr-1-5 --host 127.0.0.1 --port 8091 \
+  --max-model-len 16384 --max-num-seqs 1 --gpu-memory-utilization 0.20
+
+# The runner reads Typhoon's supplied prompt from its local README, and writes
+# an evidence JSON.  Omit the filters to process every automatic candidate.
+/opt/vllm/bin/python scripts/run_typhoon_candidate_ocr.py \
+  --candidate-manifest /path/to/ocr-auto-candidates/candidate-manifest.json \
+  --typhoon-model-readme /root/llm-cache/typhoon-ocr1.5-2b/README.md \
+  --page 1 --candidate-id header_line-001 \
+  --output /path/to/results/typhoon-p1-header.json
+```
+
+#### Warm-server four-field validation — automatic crops
+
+The candidate builder was run over all 24 source pages and made **165**
+detail crops.  The following four were selected only because the previous
+full-page Qwen run had known strict-anchor errors.  They were generated from
+their detected semantic boxes/line grouping; the table intentionally gives
+candidate identity and image dimensions rather than reusable page coordinates.
+Typhoon used the prompt parsed from its model README at `temperature=0`.
+Codex Terra then compared each reported anchor to the original rendered page.
+
+| Page | Automatic candidate | Detected evidence | Typhoon image sent | Warm E2E | Terra strict result | Scope |
+| ---: | --- | --- | ---: | ---: | --- | --- |
+| 1 | `header_line-001` | Vertically aligned `header` fragments grouped into one line | 1800 × 155 | 0.275 s | **Accept** — gazette issue `๒๔๘` exact | This header field only |
+| 1 | `text-005` | One detected text region, reading order 5 | 1800 × 155 | 0.190 s | **Accept** — effective after two years | This clause only |
+| 3 | `text-005` | One detected text region, reading order 5 | 1800 × 264 | 0.099 s | **Accept** — signing role exact | This role only |
+| 4 | `text-001` | One detected text region, reading order 4 | 1800 × 621 | 1.330 s | **Accept** — meeting date/location exact | Those meeting fields only |
+
+This is **4/4 strict anchors**, not 100% character or whole-page accuracy.
+The page-4 candidate contains a larger paragraph than its target sentence, so
+only the source-checked meeting fields are eligible as replacements.  No
+result from the remaining 161 automatic candidates has been promoted without
+independent validation.
+
+The safe automatic repair decision is deliberately conservative:
+
+1. Paddle orientation classification rotates only high-confidence pages;
+   ambiguous pages retain their pixels and are queued for review.
+2. PP-DocLayoutV3 detects regions and the automatic candidate builder makes
+   crops without fixed coordinates.
+3. Qwen full-page 2000 remains the canonical OCR record.  Typhoon reads only
+   the candidate crop using its documented prompt.
+4. A repair is accepted only with an independently checkable match (or
+   explicit source-image/Terra approval).  A disagreement is a review item,
+   never an automatic replacement.  PDF embedded text is auxiliary evidence
+   only when a per-region text-health check says it is clean; corrupted Thai
+   text is discarded.
 
 [`apply_paddle_orientation.py`](../scripts/apply_paddle_orientation.py) converts Paddle orientation classifications into upright images plus an auditable rotation manifest, refusing low-confidence automatic rotations. [`prepare_layout_ocr_images.py`](../scripts/prepare_layout_ocr_images.py) then saves a `layout-manifest.json`, overlays, full-page images, and crop images. [`benchmark_vllm_ocr_modes.py`](../scripts/benchmark_vllm_ocr_modes.py) records per-request response text, token counts, finish reason, and E2E time; its `--detail-image` option adds a crop as an image beside one full page without injecting unverified crop text. `sharded-batch` prevents a 24-image request from being conflated with a single context-length experiment.
 
-The relevant upstream references are [PP-DocLayoutV3 safetensors](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_safetensors/tree/main), [PaddleOCR layout detection](https://www.paddleocr.ai/latest/en/version3.x/module_usage/layout_detection.html), and [PP-StructureV3](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PP-StructureV3.html).
+The relevant upstream references are [PP-DocLayoutV3 safetensors](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_safetensors/tree/main), [PaddleOCR layout detection](https://www.paddleocr.ai/latest/en/version3.x/module_usage/layout_detection.html), [PP-StructureV3](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PP-StructureV3.html), and [Typhoon OCR 1.5-2B](https://huggingface.co/typhoon-ai/typhoon-ocr1.5-2b).
