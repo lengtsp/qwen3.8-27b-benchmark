@@ -73,6 +73,17 @@ The high-resolution response now correctly preserves the page-1 title, opening l
 
 The 19/21 figure remains an **anchor-field score only**. It must not be presented as whole-page or character accuracy: outside this rubric, page 4 still changes some ranking statistics (for example 145/148 becomes 185/158) and threat labels/counts. A human must verify exact legal and numerical material from the original page.
 
+## Critical-region crop verification: two remaining fields corrected
+
+The whole-page 300-DPI result was followed by two image-only crops from the same 2,481 × 3,508 px source. No PyMuPDF text was sent: its Thai text layer was visibly encoding-corrupt and was discarded. Each crop had a narrow task and acts as a field-level verification, not as a replacement transcript.
+
+| Field | Crop rectangle `(left, top, right, bottom)` | Crop size | E2E | OCR result |
+| --- | --- | ---: | ---: | --- |
+| Gazette issue | `(120, 300, 1250, 610)` | 1,130 × 310 px | 1.16 s | `เล่ม ๑๔๑ ตอนพิเศษ ๒๔๘ ง` — correct |
+| Effective-date rule | `(180, 1350, 2320, 2350)` | 2,140 × 1,000 px | 4.35 s | `ข้อ ๒ ... เมื่อพ้นกำหนดสองปี...` — correct |
+
+The full-page 19/21 transcript plus these two field-level replacements is **21/21 on this frozen rubric**, with an additional 5.51 seconds of targeted OCR after the page result. This must not be called 100% page accuracy: the unscored page-4 statistics and threat labels still need their own crop verification. Crop is the recommended next step for those fields; a whole-page 2,700 px retry was not needed to resolve these two errors.
+
 ## Interpretation
 
 At 1 MP effective resolution, Qwen3.8-27B is useful for locating sections, headings, familiar English terms, and a first-pass Thai transcription. The 300-DPI/2,400 px profile materially improves the measured anchor fields, but it is still not reliable for every exact legal title, government date, issue number, legal effective date, or numerical claim in this source. The 21-field score is intentionally only an anchor-field metric, not a full-page score: the high-resolution output still alters unscored page-4 statistics and threat labels. It is **not CER**; calculating CER would require complete normalized ground truth plus alignment, while these responses are capped and can be truncated. The benchmark therefore recommends MTP 3 + BF16 KV at 300 DPI / 2,400 px for accuracy-first OCR, with mandatory image/PDF verification of every final regulatory value.

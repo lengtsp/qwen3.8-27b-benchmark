@@ -181,6 +181,17 @@ These are warm E2E figures after one discarded 64-token request. The direct one-
 
 On the same frozen 21-field visual rubric (page 1 by itself plus page 4 within the eight-page batch), high resolution scores **19/21 = 90.5%** strict anchor-field accuracy versus the 1 MP BF16 baseline's **12/21 = 57.1%**. The two remaining scored errors are the gazette issue `๒๔๘` read as `๒๕๘`, and the effective-date rule (the image says **after two years**, while the output says the following day). It still is **not character-perfect OCR**: unscored page-4 statistics and some threat labels remain changed, so regulatory values must be verified against the page image/PDF. See the full rubric in [`docs/cloud-standard-ocr-quality.md`](docs/cloud-standard-ocr-quality.md).
 
+#### Critical-region crop verification: preferred over a full-page 2,700 px retry
+
+Rather than reloading the server to raise the whole-page ceiling to 2,700 px, two crops from the existing 300-DPI source fixed the two remaining scored fields. A crop preserves the source character height locally; it is therefore more targeted than spending extra image tokens on empty margins and already-correct text.
+
+| Field verified from page 1 | Crop from the 2,481 × 3,508 px source | E2E | Prompt / completion tokens | Result |
+| --- | --- | ---: | ---: | --- |
+| Gazette issue | 1,130 × 310 px, header line only | **1.16 s** | 457 / 44 | Correctly read `เล่ม ๑๔๑ ตอนพิเศษ ๒๔๘ ง` |
+| Effective-date rule | 2,140 × 1,000 px, clauses 1–3 | **4.35 s** | 2,184 / 254 | Correctly read `เมื่อพ้นกำหนดสองปี...` |
+
+Use the full-page result for ordinary text, then run a focused crop only for legally material fields, low-confidence spans, tables, dates and numeric statistics. Attach the page number and crop rectangle to each replacement; the crop must replace **only that field**, never silently rewrite the whole-page transcript. In this example, adding both targeted checks costs about **5.51 s** and raises the frozen key-field result from 19/21 to **21/21** for those checked fields. It does not establish whole-page/CER accuracy; page-4 statistics should receive the same crop-and-verify treatment.
+
 ### Long input + long output: fixed 4,096-token completion
 
 This is the primary "read a long document, then write a long answer" probe. The 8K/32K/80K/120K labels below are **total-sequence profiles** (input plus output), not input sizes by themselves. Every row sends the stated **actual API prompt tokens** and receives exactly **4,096 completion tokens** (`finish_reason=length`). The server was warm, model startup/CUDA-graph capture and one discarded warm-up request are excluded, and every configuration used `max-model-len=122880` so the input plus output fits the 120K deployment setting.
