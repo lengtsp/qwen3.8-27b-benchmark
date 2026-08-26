@@ -64,11 +64,29 @@ def call_api(base_url: str, model: str, content: list[dict], max_tokens: int) ->
 
 
 def single_content(
-    page_number: int, image_url: str, instruction: str | None = None
+    page_number: int,
+    image_url: str,
+    instruction: str | None = None,
+    detail_image_urls: list[str] | None = None,
 ) -> list[dict]:
-    return [
+    content = [
         {"type": "text", "text": f"[เอกสารหน้า {page_number}]"},
         {"type": "image_url", "image_url": {"url": image_url}},
+    ]
+    for index, detail_image_url in enumerate(detail_image_urls or [], start=1):
+        content.extend(
+            [
+                {
+                    "type": "text",
+                    "text": (
+                        f"[ภาพขยายรายละเอียด {index} ของหน้า {page_number}; "
+                        "เป็นส่วนหนึ่งของภาพเต็มหน้าด้านบน]"
+                    ),
+                },
+                {"type": "image_url", "image_url": {"url": detail_image_url}},
+            ]
+        )
+    content.append(
         {
             "type": "text",
             "text": instruction
@@ -77,8 +95,9 @@ def single_content(
                 "โดยคงหัวข้อ เลขข้อ วันที่ และตัวเลขสำคัญไว้ให้มากที่สุด. "
                 "หากอ่านไม่ชัดให้เขียน [อ่านไม่ชัด] และห้ามเติมจากความรู้ภายนอกภาพ."
             ),
-        },
-    ]
+        }
+    )
+    return content
 
 
 def batch_content(
@@ -120,6 +139,16 @@ def main() -> None:
         help="Optional image-only OCR instruction; use a narrow field request for verification crops.",
     )
     parser.add_argument(
+        "--detail-image",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "Repeatable high-resolution crop paired with one full page in sequential mode. "
+            "The crop is sent as an extra image, not injected as unverified text."
+        ),
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=8,
@@ -137,6 +166,13 @@ def main() -> None:
     for path in args.images:
         if not path.is_file():
             raise FileNotFoundError(path)
+    for detail_path in args.detail_image:
+        if not detail_path.is_file():
+            raise FileNotFoundError(detail_path)
+    if args.detail_image and (args.mode != "sequential" or len(args.images) != 1):
+        raise ValueError(
+            "--detail-image requires --mode sequential with exactly one full-page --images file"
+        )
     page_numbers = list(range(args.first_page, args.first_page + len(args.images)))
 
     if args.mode == "sequential":
@@ -151,7 +187,14 @@ def main() -> None:
                         args.model,
                         single_content(
                             page_number,
-                            image_data_url(path, args.cache_buster_id), args.instruction
+                            image_data_url(path, args.cache_buster_id),
+                            args.instruction,
+                            [
+                                image_data_url(detail_path, args.cache_buster_id + index)
+                                for index, detail_path in enumerate(
+                                    args.detail_image, start=1
+                                )
+                            ],
                         ),
                         args.max_tokens_per_page,
                     ),

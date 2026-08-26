@@ -43,6 +43,46 @@ The dedicated gazette crop misread `๑๔๑` as `๑๘๑`; the effective-dat
 
 PP-DocLayoutV3 is installed and completed layout detection for all 24 pages; its boxes are the crop source used above. The base Thai PaddleOCR detector/recognizer weights were also downloaded, but **no PaddleOCR transcript is included in the scores**: a normal CPU run failed in Paddle's oneDNN/PIR path, and the fallback attempted to allocate about 31.5 GiB of WSL memory before the Linux process was OOM-killed. A smaller 2600-px retry also made the Ubuntu-E WSL service unstable. PaddleOCR-VL 1.6 is **not installed yet**; the required GPU Paddle wheel is a 1.8-GB download and remains incomplete. Until that GPU environment installs and produces independently checked output, full-page Qwen 2000 plus PP-DocLayoutV3 field crops remains the reproducible accuracy recommendation.
 
+## One-page full + PP-DocLayoutV3 detail repair trial
+
+This is the stricter reusable workflow: send the **2000 full page and an original-resolution detail crop together in one vLLM MTP 3 request**, then ask for one named field only. PP-DocLayoutV3 supplies only crop geometry; it does not provide untrusted OCR text to Qwen. One full-page-plus-detail warm-up was discarded. Codex Terra checked the four requests below character-for-character against the 300-DPI render.
+
+| Source field | PP-DocLayoutV3-derived detail | Full + detail prompt result | E2E / prompt tokens | Terra strict result | Field patch decision |
+| --- | --- | --- | ---: | --- | --- |
+| Page 1 gazette header | One `header` box, padded: `(209,269,1026,466)` | `เล่ม ๑๔๑ ตอนพิเศษ ๒๘๘ ง` | 1.37 s / 2,995 | **Wrong**: `๒๔๘` → `๒๘๘` | Reject |
+| Page 1 clause 2 | One `text` box, padded: `(239,1597,2233,1804)` | `ข้อ ๒ ประกาศนี้ให้ใช้บังคับเมื่อพ้นกำหนดสองปีนับแต่วันประกาศในราชกิจจานุเบกษาเป็นต้นไป` | 1.80 s / 3,224 | **Exact** | **Approve this field only** |
+| Page 3 signing role | One `text` box, padded: `(1074,1109,1821,1316)` | `รองนายกรัฏมนตรี  ปลื้บิบัติหน้าที่` | 1.62 s / 2,980 | **Wrong**: `รัฐ` → `รัฏ`; `ปฏิบัติ` mutates | Reject |
+| Page 4 meeting field | First `text` box/body tile: `(300,740,2283,1040)` | `เมื่่อวันที่ ๒๒ ธันวาคม ๒๕๖๖ ณ ตึกบัญชาการ ๑ ทำเนียบรัฐบาล` | 1.82 s / 3,401 | **Wrong under exact OCR**: duplicated tone mark in `เมื่่อ`; all other target words/numerals match | Reject |
+
+Strict score: **1/4 = 25%**. The approved page-1 clause replaces only that span in the full-page transcript; if that source-reviewed replacement is applied, the original 92/96 anchor record becomes **93/96 = 96.9%**. This is a field-level result, not a new whole-document OCR/CER score.
+
+Two narrower retries were also rejected: the page-3 role-line crop produced `รองนายกรรฐมนตรี ปลื้บตติหน่าที่`; the page-4 location-only request hallucinated a different meeting room. Crop detail is therefore a useful **verification-candidate generator**, not a safe automatic repair mechanism. In this document it repaired the legal effective clause but did not reliably repair small header digits, Thai job titles, or the entire meeting metadata.
+
+### Paddle orientation preflight: required before layout
+
+Use PaddleOCR's small `PP-LCNet_x1_0_doc_ori` classifier before PP-DocLayoutV3. Its label represents the corrective counter-clockwise rotation. A controlled calibration used page 1 rotated in advance: input CCW 90° was classified as correction `270°` (0.921), input CW 90° as `90°` (0.928), and input 180° as `180°` (0.918).
+
+On the 24 original 300-DPI pages, pages 1–19 and 21–24 classified as upright `0°` with 0.899–0.932 confidence and 0.84–0.91 top-two margin. Page 20 is visually upright but classified as `180°` at only 0.504 confidence with a 0.067 margin over `0°`; it was manually approved as `0°` and **not rotated**. The standard gate is confidence ≥ 0.80 **and** top-two margin ≥ 0.20. Anything else requires source-image review and an explicit recorded override.
+
+```bash
+# 1. Classify orientation; it is separate from full Paddle OCR.
+/root/venvs/ppstructurev3/bin/paddleocr doc_img_orientation_classification \
+  -i /path/to/rendered-pages --save_path /path/to/orientation \
+  --topk 4 --device cpu --enable_mkldnn False --cpu_threads 2
+
+# 2. Apply only an accepted angle. Page 20 below is a source-reviewed override,
+# not a blind rotation.
+/root/venvs/ppstructurev3/bin/python scripts/apply_paddle_orientation.py \
+  --input-dir /path/to/rendered-pages --orientation-dir /path/to/orientation \
+  --output-dir /path/to/upright-pages --approved-orientation 20=0
+
+# 3. Only then detect layout and build detail crops from the upright images.
+/root/venvs/ppstructurev3/bin/python scripts/prepare_layout_ocr_images.py \
+  --input-dir /path/to/upright-pages --output-dir /path/to/layout \
+  --model-dir /root/llm-cache/pp-doclayoutv3-safetensors --device cpu \
+  --profile 2000=1408x1984
+```
+
 ## What “1400 / 1800 / 2000 / 2200” means here
 
 These are actual image inputs, not an enlarged `max_model_len` reservation. To keep Qwen's vision grid deterministic, the full A4 inputs were pre-resized to these exact 32-pixel-grid dimensions before sending them to the already-warm high-resolution server:
@@ -189,6 +229,6 @@ For a visually verified hybrid field, create a named crop with its source rectan
   --output /path/to/results/signature-date.json
 ```
 
-[`prepare_layout_ocr_images.py`](../scripts/prepare_layout_ocr_images.py) saves a `layout-manifest.json`, overlays, full-page images, and crop images. [`benchmark_vllm_ocr_modes.py`](../scripts/benchmark_vllm_ocr_modes.py) records per-request response text, token counts, finish reason, and E2E time; `sharded-batch` prevents a 24-image request from being conflated with a single context-length experiment.
+[`apply_paddle_orientation.py`](../scripts/apply_paddle_orientation.py) converts Paddle orientation classifications into upright images plus an auditable rotation manifest, refusing low-confidence automatic rotations. [`prepare_layout_ocr_images.py`](../scripts/prepare_layout_ocr_images.py) then saves a `layout-manifest.json`, overlays, full-page images, and crop images. [`benchmark_vllm_ocr_modes.py`](../scripts/benchmark_vllm_ocr_modes.py) records per-request response text, token counts, finish reason, and E2E time; its `--detail-image` option adds a crop as an image beside one full page without injecting unverified crop text. `sharded-batch` prevents a 24-image request from being conflated with a single context-length experiment.
 
 The relevant upstream references are [PP-DocLayoutV3 safetensors](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_safetensors/tree/main), [PaddleOCR layout detection](https://www.paddleocr.ai/latest/en/version3.x/module_usage/layout_detection.html), and [PP-StructureV3](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PP-StructureV3.html).
