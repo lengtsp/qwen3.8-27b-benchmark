@@ -4,6 +4,55 @@ Local benchmarks run on 2026-08-25–26 with one NVIDIA RTX PRO 6000 Blackwell W
 
 > The figures below are single-user measurements, not a multi-user serving benchmark. Text E2E means the full non-streaming API request. Decode is generation-only server timing. The original PDF/images are deliberately not included in this repository.
 
+## Quick-start: recommended vLLM parameters
+
+The commands below are separated deliberately: **vLLM regular** has no speculative decoding; **vLLM + MTP** adds Qwen's native MTP draft head. The fastest accuracy-first default for coding and page OCR is MTP 3 at 32K context with BF16 KV (`auto`).
+
+### vLLM regular (baseline, no MTP)
+
+```bash
+vllm serve /root/llm-cache/qwen3.8-27b \
+  --host 127.0.0.1 --port 8000 \
+  --served-model-name qwen3.8-27b \
+  --dtype bfloat16 \
+  --max-model-len 32768 \
+  --max-num-seqs 128 \
+  --limit-mm-per-prompt '{"image":16}' \
+  --mm-processor-kwargs '{"max_pixels":1048576}' \
+  --kv-cache-dtype auto \
+  --gpu-memory-utilization 0.90
+```
+
+### vLLM + MTP (recommended for text, code, and OCR)
+
+```bash
+vllm serve /root/llm-cache/qwen3.8-27b \
+  --host 127.0.0.1 --port 8000 \
+  --served-model-name qwen3.8-27b \
+  --dtype bfloat16 \
+  --max-model-len 32768 \
+  --max-num-seqs 128 \
+  --limit-mm-per-prompt '{"image":16}' \
+  --mm-processor-kwargs '{"max_pixels":1048576}' \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+  --kv-cache-dtype auto \
+  --gpu-memory-utilization 0.90
+```
+
+The only inference-mode difference is `--speculative-config`. Do **not** add `--enforce-eager`; the tested graph-mode service reports `enforce_eager=False`.
+
+| Situation | `--max-model-len` | `--kv-cache-dtype` | vLLM regular | vLLM + MTP (recommended) |
+| --- | ---: | --- | --- | --- |
+| Text/chat | 12,288 | `auto` | use the baseline command above with `12288` | `bash scripts/run_vllm_profile.sh text` |
+| Coding / agent | 32,768 | `auto` | use the baseline command above | `bash scripts/run_vllm_profile.sh code` |
+| OCR page-by-page | 32,768 | `auto` | use the baseline command above | `bash scripts/run_vllm_profile.sh ocr` |
+| 80K long document, accuracy first | 81,920 | `auto` | use the baseline command above with `81920` | `bash scripts/run_vllm_profile.sh long-80k-quality` |
+| 80K long document, more concurrent users | 81,920 | `fp8_e4m3` | use the baseline command above with `81920` / `fp8_e4m3` | `bash scripts/run_vllm_profile.sh long-80k-capacity` |
+| 120K long document, accuracy first | 122,880 | `auto` | use the baseline command above with `122880` | `bash scripts/run_vllm_profile.sh long-120k-quality` |
+| 120K long document, more concurrent users | 122,880 | `fp8_e4m3` | use the baseline command above with `122880` / `fp8_e4m3` | `bash scripts/run_vllm_profile.sh long-120k-capacity` |
+
+[`scripts/run_vllm_profile.sh`](scripts/run_vllm_profile.sh) implements the MTP profiles. FP8 expands KV capacity but requires a task-quality check before production OCR.
+
 ### Metric definitions
 
 - **E2E (end-to-end)** = completion/output tokens divided by wall-clock time from sending the HTTP request until its complete response arrives. It includes request serialization/upload, image preprocessing and vision encoding, prompt prefill, time-to-first-token, decoding, and API overhead. It does **not** include loading the model at server startup.
