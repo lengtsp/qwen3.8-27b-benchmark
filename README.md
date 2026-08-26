@@ -75,16 +75,16 @@ Same-input configurations are compared within each row. All single-request figur
 
 ### Long input + long output: fixed 4,096-token completion
 
-This is the primary "read a long document, then write a long answer" probe. Every row sends the stated **actual API prompt tokens** and receives exactly **4,096 completion tokens** (`finish_reason=length`). The server was warm, model startup/CUDA-graph capture and one discarded warm-up request are excluded, and every configuration used `max-model-len=122880` so the input plus output fits the 120K profile.
+This is the primary "read a long document, then write a long answer" probe. The 8K/32K/80K/120K labels below are **total-sequence profiles** (input plus output), not input sizes by themselves. Every row sends the stated **actual API prompt tokens** and receives exactly **4,096 completion tokens** (`finish_reason=length`). The server was warm, model startup/CUDA-graph capture and one discarded warm-up request are excluded, and every configuration used `max-model-len=122880` so the input plus output fits the 120K deployment setting.
 
 The input is deterministic synthetic retention records and the requested output is `ACK` repeated 4,096 times. It measures real API prefill plus long decode, but it is deliberately a **throughput stress test**, not a long-document factual-accuracy, coding-quality, or OCR-quality evaluation. The repeatable output is accepted at 100% by MTP, so do not assume its absolute MTP multiplier will transfer unchanged to open-ended reasoning.
 
-| Context profile | Actual prompt tokens | Completion tokens | vLLM regular BF16 elapsed / E2E tok/s | vLLM + MTP 3 BF16 elapsed / E2E tok/s | vLLM + MTP 3 FP8 KV elapsed / E2E tok/s | Fastest vs. regular |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 8K | 3,957 | 4,096 | 141.66 s / 28.91 | 49.16 s / 83.31 | **48.44 s / 84.57** | FP8 KV, 2.93x |
-| 32K | 28,543 | 4,096 | 150.31 s / 27.25 | 66.24 s / 61.84 | **53.75 s / 76.21** | FP8 KV, 2.80x |
-| 80K | 77,658 | 4,096 | 171.54 s / 23.88 | 104.36 s / 39.25 | **67.28 s / 60.88** | FP8 KV, 2.55x |
-| 120K | 118,660 | 4,096 | 192.52 s / 21.28 | 141.83 s / 28.88 | **82.55 s / 49.62** | FP8 KV, 2.33x |
+| Total-sequence profile | Actual prompt tokens | Completion tokens | Actual total tokens | vLLM regular BF16 elapsed / E2E tok/s | vLLM + MTP 3 BF16 elapsed / E2E tok/s | vLLM + MTP 3 FP8 KV elapsed / E2E tok/s | Fastest vs. regular |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8K | 3,957 | 4,096 | 8,053 | 141.66 s / 28.91 | 49.16 s / 83.31 | **48.44 s / 84.57** | FP8 KV, 2.93x |
+| 32K | 28,543 | 4,096 | 32,639 | 150.31 s / 27.25 | 66.24 s / 61.84 | **53.75 s / 76.21** | FP8 KV, 2.80x |
+| 80K | 77,658 | 4,096 | 81,754 | 171.54 s / 23.88 | 104.36 s / 39.25 | **67.28 s / 60.88** | FP8 KV, 2.55x |
+| 120K | 118,660 | 4,096 | 122,756 | 192.52 s / 21.28 | 141.83 s / 28.88 | **82.55 s / 49.62** | FP8 KV, 2.33x |
 
 For this deliberately high-MTP-acceptance workload, MTP 3 is the material accelerator for long answers. FP8 KV is nearly tied with BF16 at the 8K case, but becomes progressively more valuable as the real prompt becomes longer: at 120K it reduces end-to-end time from 141.83 s (MTP 3 BF16) to 82.55 s (MTP 3 FP8 KV). Keep BF16 KV as the accuracy-first default for OCR and semantic long-document work until the specific task has passed a quality comparison; select FP8 KV for maximum 80K–120K response speed/capacity after that validation.
 
