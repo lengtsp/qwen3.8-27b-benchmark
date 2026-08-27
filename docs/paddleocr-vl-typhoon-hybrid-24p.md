@@ -147,4 +147,3 @@ Evaluate only the clean prose subset after the OCR run:
 ```
 
 The generated OCR text, rendered pages, and evaluation JSON are intentionally not committed: they derive from the supplied source document and are retained only in the local test workspace.
-
